@@ -7,9 +7,8 @@ use typeshare::typeshare;
 #[derive(Default)]
 pub enum HidBackend {
     Otg,
-    Ch9329,
-    Ch9329f, // 🟢 新增：专属于新款 F 版本的后端选项
     #[default]
+    Ch9329,
     None,
 }
 
@@ -49,7 +48,7 @@ impl Default for Ch9329DescriptorConfig {
     fn default() -> Self {
         Self {
             vendor_id: 0x1a86,
-            product_id: 0xe129, // 老款默认 PID
+            product_id: 0xe129,
             manufacturer: "WCH.CN".to_string(),
             product: "CH9329".to_string(),
             serial_number: None,
@@ -57,18 +56,6 @@ impl Default for Ch9329DescriptorConfig {
     }
 }
 
-// 🟢 新增：CH9329F 的专属默认芯片描述符
-impl Ch9329DescriptorConfig {
-    pub fn default_f() -> Self {
-        Self {
-            vendor_id: 0x1a86,
-            product_id: 0xe12a, // 👈 新款 CH9329F 的真实物理默认 PID
-            manufacturer: "WCH.CN".to_string(),
-            product: "CH9329F".to_string(),
-            serial_number: None,
-        }
-    }
-}
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ch9329DescriptorState {
