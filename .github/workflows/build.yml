@@ -67,7 +67,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # The Docker workflow builds the same targets with the same Cross images.
           shared-key: linux-cross-release
           key: ${{ hashFiles('Cross.toml', 'build/cross/Dockerfile.*') }}
           cache-all-crates: true
@@ -107,6 +106,16 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: 🟢 [新增] 缓存 vcpkg 下载与编译产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg
+            vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-cache-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-cache-v1-
+
       - name: Prepare vcpkg and dependencies
         shell: pwsh
         run: |
@@ -118,7 +127,11 @@ jobs:
             git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
           }
 
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          # 如果存在引导文件才重复执行引导，缩短缓存恢复后的时间
+          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
+            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          }
+          
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --x-install-root="$env:VCPKG_INSTALLED_DIR"
 
           $tripletRoot = Join-Path $env:VCPKG_INSTALLED_DIR $env:VCPKG_DEFAULT_TRIPLET
@@ -154,7 +167,8 @@ jobs:
   release:
     runs-on: ubuntu-22.04
     needs: [deb, windows]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+    # 🟢 [修改] 只有显式勾选了发布 Release 且提供了 tag 时才允许进入该任务，彻底避开空字符串校验失败报错
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.release_tag != '' }}
     timeout-minutes: 30
     permissions:
       contents: write
