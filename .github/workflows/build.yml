@@ -64,6 +64,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # 🟢 [新增] 专门针对 Linux Cross 交叉编译的 Docker 容器级全量缓存
+      - name: 🟢 缓存 Cross/Docker 容器内部依赖与编译半成品
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git-db/
+            target/
+          key: ${{ runner.os }}-cross-build-cache-v1-${{ hashFiles('Cross.toml', 'Cargo.lock', 'build/cross/Dockerfile.*') }}
+          restore-keys: |
+            ${{ runner.os }}-cross-build-cache-v1-
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -74,7 +88,10 @@ jobs:
       - name: Install cross
         run: cargo install cross --version 0.2.5 --locked
 
+      # 🟢 [核心新增] 设置环境变量，强行命令 cross 将容器内部编译目标路径映射到宿主机缓存区
       - name: Build linux binary
+        env:
+          CARGO_TARGET_DIR: target
         run: bash build/build-images.sh
 
       - name: Package deb
@@ -106,7 +123,7 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: 🟢 [新增] 缓存 vcpkg 下载与编译产物
+      - name: 🟢 缓存 vcpkg 下载与编译产物
         uses: actions/cache@v4
         with:
           path: |
@@ -127,7 +144,6 @@ jobs:
             git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
           }
 
-          # 如果存在引导文件才重复执行引导，缩短缓存恢复后的时间
           if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
             & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           }
@@ -167,7 +183,6 @@ jobs:
   release:
     runs-on: ubuntu-22.04
     needs: [deb, windows]
-    # 🟢 [修改] 只有显式勾选了发布 Release 且提供了 tag 时才允许进入该任务，彻底避开空字符串校验失败报错
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.release_tag != '' }}
     timeout-minutes: 30
     permissions:
