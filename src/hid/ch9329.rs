@@ -358,44 +358,51 @@ impl Ch9329Backend {
         Ok(())
     }
 
-    fn xfer_packet(
+        fn xfer_packet(
         port: &mut dyn serialport::SerialPort,
         address: u8,
         cmd: u8,
         data: &[u8],
     ) -> Result<Response> {
-        let _ = port.clear(serialport::ClearBuffer::Input);
+        // 1. 发送前先清空缓冲区，确保起点干净
+        let _ = port.clear(serialport::ClearBuffer::All);
 
+        // 2. 发送请求命令
         Self::write_packet(port, address, cmd, data)?;
 
-        let mut pending = Vec::with_capacity(128);
+        // 预开辟足够大的动态动态接收缓冲区
+        let mut pending = Vec::with_capacity(256);
         let deadline = Instant::now() + Duration::from_millis(RESPONSE_TIMEOUT_MS);
         let expected_ok = expected_response_cmd(cmd, false);
         let expected_err = expected_response_cmd(cmd, true);
 
         loop {
-            let mut chunk = [0u8; 128];
+            // 🟢【核心修复点 1】将单次读取的临时口袋开大到 256 字节
+            // 确保 CH343 瞬间送来的 56 字节乃至多个粘包能够在一把 read 中被完整、不截断地吞下
+            let mut chunk = [0u8; 256];
             match port.read(&mut chunk) {
                 Ok(n) if n > 0 => {
                     pending.extend_from_slice(&chunk[..n]);
 
+                    // 🟢【核心修复点 2】使用循环不间断地排空当前 pending 里的所有数据
+                    // 应对 CH343 极速带来的多命令粘包场景
                     while let Some((response, consumed)) = try_extract_response(&pending) {
+                        // 无论当前这个包是不是我们要的，都必须先把它从 pending 缓冲区里移走，防止阻塞
+                        let current_response_cmd = response.cmd;
                         pending.drain(..consumed);
-                        if response.cmd == expected_ok || response.cmd == expected_err {
+
+                        // 精准命中：如果是我们当前命令对应的成功或失败回包，立刻返回，通关！
+                        if current_response_cmd == expected_ok || current_response_cmd == expected_err {
                             return Ok(response);
                         }
 
+                        // 如果捞出来的是别的命令的包（比如走得太快的心跳包或键鼠碎片），打印 trace 留痕，继续向下捞
                         trace!(
-                            "CH9329 ignored out-of-order response: expected 0x{:02X}/0x{:02X}, got 0x{:02X}",
+                            "CH9329 filtered an overlapping packet: expected 0x{:02X}/0x{:02X}, bypass 0x{:02X}",
                             expected_ok,
                             expected_err,
-                            response.cmd
+                            current_response_cmd
                         );
-                    }
-
-                    if pending.len() > MAX_PACKET_SIZE * 4 {
-                        let keep = MAX_PACKET_SIZE;
-                        pending.drain(..pending.len().saturating_sub(keep));
                     }
                 }
                 Ok(_) => {}
@@ -408,16 +415,19 @@ impl Ch9329Backend {
                 }
             }
 
+            // 3. 超时安全熔断
             if Instant::now() >= deadline {
                 return Err(Self::backend_error(
-                    format!("No matching response from CH9329 for cmd 0x{:02X}", cmd),
+                    format!("No matching response from CH9329 for cmd 0x{:02X}. Remaining buffer: {}", cmd, Self::hex_bytes(&pending)),
                     "no_response",
                 ));
             }
 
-            thread::sleep(Duration::from_millis(1));
+            // 给系统级串口驱动留出微小的微秒级换气时间
+            thread::sleep(Duration::from_micros(200));
         }
     }
+
 
     fn try_best_effort_reset(port: &mut dyn serialport::SerialPort, address: u8) {
         if let Err(err) = Self::write_packet(port, address, cmd::RESET, &[]) {
