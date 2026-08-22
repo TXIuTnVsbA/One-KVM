@@ -7,8 +7,8 @@ use typeshare::typeshare;
 #[derive(Default)]
 pub enum HidBackend {
     Otg,
-    #[default]
     Ch9329,
+    #[default]
     None,
 }
 
