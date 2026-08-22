@@ -8,6 +8,7 @@ use typeshare::typeshare;
 pub enum HidBackend {
     Otg,
     Ch9329,
+    Ch9329f, // 🟢 新增：专属于新款 F 版本的后端选项
     #[default]
     None,
 }
