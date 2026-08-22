@@ -20,7 +20,7 @@ use tracing::{info, trace, warn};
 use super::backend::{HidBackend, HidBackendRuntimeSnapshot};
 use super::ch9329_proto::{
     build_packet, cmd, expected_response_cmd, try_extract_response, ChipInfo, LedStatus, Response,
-    DEFAULT_ADDR, DEFAULT_BAUD_RATE, MAX_PACKET_SIZE,
+    DEFAULT_ADDR, DEFAULT_BAUD_RATE, 
 };
 use super::types::{KeyEventType, KeyboardEvent, KeyboardReport, MouseEvent, MouseEventType};
 use crate::config::{Ch9329DescriptorConfig, Ch9329DescriptorState};
