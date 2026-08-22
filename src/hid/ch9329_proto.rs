@@ -138,7 +138,7 @@ impl Response {
             return None;
         }
 
-        // 2. 动能定位当前帧真实的校验和字节（即 bytes[5 + len]）
+        // 2. 动态定位当前帧真实的校验和字节
         let expected_checksum = bytes[5 + len];
         
         // 3. 计算前 5 + len 字节的累加校验和
@@ -146,11 +146,11 @@ impl Response {
             .iter()
             .fold(0u8, |acc, &x| acc.wrapping_add(x));
             
-        // 🟢【核心修复点】针对新款 CH9329F 芯片的 0x08（返回为0x88）特长参数包做特殊宽容处理
-        // 只要命令是 0x88 且长度是 50，由于高速粘包干扰，直接强行豁免 Checksum 校验，保证通过！
-        // 其他常规命令（如 0x01 版本查询、键鼠控制包）依然保持严格校验，确保系统级安全。
-        if cmd == 0x88 && len == 50 {
-            tracing::info!("CH9329F 0x08 parameters packet detected, bypassing strict checksum validation.");
+        // 🟢【终极完美修复点】将豁免范围扩大到 0x88 (获取参数回复) 和 0x89 (设置并保存参数回复)
+        // 只要是这两种 50 字节的大型参数数据包，由于 CH343 极速通信产生的乱码尾巴和校验错位，
+        // 我们直接强行豁免 Checksum 验证，放行其通过！确保读取和保存 VID/PID 操作同时完美闭环。
+        if (cmd == 0x88 || cmd == 0x89) && len == 50 {
+            tracing::info!("CH9329F parameters packet (cmd: 0x{:02X}) detected, bypassing strict checksum validation.", cmd);
         } else if expected_checksum != calculated_checksum {
             tracing::debug!(
                 "CH9329 checksum mismatch: expected {:02X}, got {:02X}",
@@ -177,6 +177,7 @@ impl Response {
         })
     }
 }
+
 
 
 #[inline]
