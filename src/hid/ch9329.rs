@@ -601,7 +601,7 @@ impl Ch9329Backend {
         })
     }
 
-    fn read_device_descriptor_on_port(
+        fn read_device_descriptor_on_port(
         port: &mut dyn serialport::SerialPort,
         address: u8,
     ) -> Result<Ch9329DescriptorState> {
@@ -634,6 +634,15 @@ impl Ch9329Backend {
         } else {
             None
         };
+
+        // 🟢【自动区分核心】如果芯片存储的物理 PID 是 0xE12A (CH9329F 的出厂物理默认值)
+        // 且芯片未启用或未定义具体的产品名称字符串，我们将其在网页前端无缝、全自动填充为 "CH9329F" 展现
+        if descriptor.product_id == 0xe12a && descriptor.product.is_empty() {
+            descriptor.product = "CH9329F".to_string();
+        } else if descriptor.product_id == 0xe129 && descriptor.product.is_empty() {
+            // 老款芯片兜底，保持原本在网页前端显示纯净的 CH9329 默认名称
+            descriptor.product = "CH9329".to_string();
+        }
 
         Ok(Ch9329DescriptorState {
             descriptor,
@@ -708,6 +717,7 @@ impl Ch9329Backend {
         let mut port = Self::open_port(port_path, baud_rate)?;
         Self::read_device_descriptor_on_port(port.as_mut(), DEFAULT_ADDR)
     }
+
 
     fn open_ready_port(
         port_path: &str,
@@ -878,8 +888,16 @@ impl Ch9329Backend {
         loop {
             match Self::open_ready_port(port_path, baud_rate, address) {
                 Ok((port, info)) => {
+                    // 🟢 动态智能命名：判断是新款 CH9329F 还是老款 CH9329
+                    let chip_name = if info.version_raw == 0x30 {
+                        "CH9329F"
+                    } else {
+                        "CH9329"
+                    };
+
                     info!(
-                        "CH9329 reconnected: {}, USB: {}",
+                        "{} reconnected: {}, USB: {}",
+                        chip_name,
                         info.version,
                         if info.usb_connected {
                             "connected"
@@ -902,6 +920,7 @@ impl Ch9329Backend {
             }
         }
     }
+
 
     fn recover_worker_port(
         mut port: Box<dyn serialport::SerialPort>,
@@ -1179,8 +1198,16 @@ impl HidBackend for Ch9329Backend {
 
         match init_rx.recv_timeout(Duration::from_millis(INIT_WAIT_MS)) {
             Ok(Ok(info)) => {
+                // 🟢 动态智能命名：系统启动初始化时自动在日志中解耦芯片型号
+                let chip_name = if info.version_raw == 0x30 {
+                    "CH9329F"
+                } else {
+                    "CH9329"
+                };
+
                 info!(
-                    "CH9329 chip detected: {}, USB: {}, LEDs: NumLock={}, CapsLock={}, ScrollLock={}",
+                    "{} chip detected: {}, USB: {}, LEDs: NumLock={}, CapsLock={}, ScrollLock={}",
+                    chip_name,
                     info.version,
                     if info.usb_connected {
                         "connected"
@@ -1199,13 +1226,13 @@ impl HidBackend for Ch9329Backend {
             Ok(Err(err)) => {
                 self.record_error(
                     format!(
-                        "CH9329 not responding on {} @ {} baud: {}",
+                        "CH9329/CH9329F not responding on {} @ {} baud: {}",
                         self.port_path, self.baud_rate, err
                     ),
                     "init_failed",
                 );
                 warn!(
-                    "CH9329 not responding on {} @ {} baud, retrying in background: {}",
+                    "CH9329/CH9329F not responding on {} @ {} baud, retrying in background: {}",
                     self.port_path, self.baud_rate, err
                 );
                 *self.worker_tx.lock() = Some(tx);
@@ -1215,13 +1242,14 @@ impl HidBackend for Ch9329Backend {
             Err(_) => {
                 let _ = tx.send(WorkerCommand::Shutdown);
                 let _ = handle.join();
-                self.record_error("Timed out waiting for CH9329 worker init", "init_timeout");
+                self.record_error("Timed out waiting for CH9329/CH9329F worker init", "init_timeout");
                 Err(AppError::Internal(
-                    "Timed out waiting for CH9329 initialization".to_string(),
+                    "Timed out waiting for CH9329/CH9329F initialization".to_string(),
                 ))
             }
         }
     }
+
 
     async fn send_keyboard(&self, event: KeyboardEvent) -> Result<()> {
         let usb_key = event.key.to_hid_usage();
