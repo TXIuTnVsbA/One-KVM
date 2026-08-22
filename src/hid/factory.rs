@@ -39,14 +39,13 @@ impl HidBackendFactory {
     async fn create(&self, backend_type: &HidBackendType) -> Result<Option<Arc<dyn HidBackend>>> {
         match backend_type {
             HidBackendType::Otg => self.create_otg_backend().await.map(Some),
-            
-            // 🟢【完美修复点】利用 Rust 的 | (OR) 语法，让老款 Ch9329 选项
-            // 和你在 schema 里新定义的新款 Ch9329f 选项，在底层同时并联路由到同一个硬件驱动中去！
-            // 这样既打通了全穷举编译检查，又完全复用了你重构好的 256字节高速排空核心。
-            HidBackendType::Ch9329 { port, baud_rate, hybrid_mouse } | 
-            HidBackendType::Ch9329f { port, baud_rate, hybrid_mouse } => {
+            HidBackendType::Ch9329 {
+                port,
+                baud_rate,
+                hybrid_mouse,
+            } => {
                 info!(
-                    "Initializing CH9329/CH9329F HID backend on {} @ {} baud, hybrid_mouse={}",
+                    "Initializing CH9329 HID backend on {} @ {} baud, hybrid_mouse={}",
                     port, baud_rate, hybrid_mouse
                 );
                 Ok(Some(Arc::new(ch9329::Ch9329Backend::with_options(
@@ -61,7 +60,6 @@ impl HidBackendFactory {
             }
         }
     }
-
 
     #[cfg(unix)]
     async fn create_otg_backend(&self) -> Result<Arc<dyn HidBackend>> {
