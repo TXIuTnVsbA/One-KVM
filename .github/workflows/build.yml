@@ -87,11 +87,14 @@ jobs:
       - name: Install cross
         run: cargo install cross --version 0.2.5 --locked
 
-      # 🟢【核心替换】绕过原厂拉取旧版基础镜像的拦截脚本，强行调用 cross 现场原生编译您的物理提纯内核
-      - name: 🟢 强制纯原生 Cross 交叉编译 ARM64 核心
+      # 🟢【终极增量净化替换】在编译前强行调用 cross 容器清理目标编译缓存，彻底粉碎脏残留，逼迫编译器使用最新物理提纯源码现场压制
+      - name: 🟢 强行粉碎脏缓存并原生 Cross 编译核心
         env:
           CARGO_TARGET_DIR: target
         run: |
+          # 仅针对目标 arm64 环境执行精准提纯清理，保留基础依赖分层
+          cross clean --target aarch64-unknown-linux-gnu --release
+          # 全量重新编译您的完美版 CH343 数据流排空与豁免逻辑
           cross build --target aarch64-unknown-linux-gnu --release
 
       # 🟢【偷天换日打包】在执行原生 deb 打包脚本前，强行将我们现场编出来的完美版二进制程序对齐到目标打包目录
