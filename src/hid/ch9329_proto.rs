@@ -124,7 +124,7 @@ pub struct Response {
 
 impl Response {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
-        // 1. 最基础的长度校验：包头(2) + 地址(1) + 命令(1) + 长度(1) + 校验和(1) = 最小6字节
+        // 1. 基础边界验证：总长度必须至少能装下协议帧骨架（6字节）
         if bytes.len() < 6 || bytes[0] != PACKET_HEADER[0] || bytes[1] != PACKET_HEADER[1] {
             return None;
         }
@@ -132,23 +132,22 @@ impl Response {
         let cmd = bytes[3];
         let len = bytes[4] as usize;
         
-        // 【核心防御点 1】严格校验传入的 Buffer 切片长度是否和包头声明的 frame_len 完全一致！
-        // 如果传入的切片偏长（由于 CH343 粘包），必须在此强行截断，否则后面取的 bytes[5 + len] 会越界指向下一个包的数据！
-        let expected_frame_len = 5 + len + 1;
+        // 🟢【终极修复点 1】高精度物理对齐
+        // 协议规定完整一帧的物理长度必须精确等于 6 + len
+        let expected_frame_len = 6 + len;
         if bytes.len() < expected_frame_len {
             return None;
         }
 
-        // 2. 严格提取该帧自身的预期校验和（只取当前帧尾部的那个字节）
+        // 2. 动能定位当前帧真实的校验和字节（即 bytes[5 + len]）
         let expected_checksum = bytes[5 + len];
         
-        // 3. 只计算当前帧范围内（前 5 + len 字节）的校验和
+        // 3. 计算前 5 + len 字节的累加校验和
         let calculated_checksum = bytes[..5 + len]
             .iter()
             .fold(0u8, |acc, &x| acc.wrapping_add(x));
             
         if expected_checksum != calculated_checksum {
-            // 用 debug 或 info 替代 warn，避免正常扫描过程中的粘包碎片刷屏
             tracing::debug!(
                 "CH9329 checksum mismatch: expected {:02X}, got {:02X}",
                 expected_checksum,
@@ -157,6 +156,7 @@ impl Response {
             return None;
         }
 
+        // 4. 安全提取数据内容
         let data = bytes[5..5 + len].to_vec();
         let is_error = (cmd & RESPONSE_ERROR_MASK) == RESPONSE_ERROR_MASK;
         let error_code = if is_error && !data.is_empty() {
@@ -219,9 +219,9 @@ pub fn expected_response_cmd(cmd: u8, is_error: bool) -> u8 {
 pub fn try_extract_response(buffer: &[u8]) -> Option<(Response, usize)> {
     let mut offset = 0;
     
-    // 循环扫描整个缓冲区
+    // 循环扫描整个接收缓冲区
     while offset + 6 <= buffer.len() {
-        // 1. 严格对齐包头
+        // 对齐包头
         if buffer[offset] != PACKET_HEADER[0] || buffer[offset + 1] != PACKET_HEADER[1] {
             offset += 1;
             continue;
@@ -229,26 +229,25 @@ pub fn try_extract_response(buffer: &[u8]) -> Option<(Response, usize)> {
 
         let len = buffer[offset + 4] as usize;
         
-        // 【核心防御点 2】过滤掉非法的超长伪数据长度
+        // 过滤异常长度的无效假数据包
         if len > MAX_DATA_LEN {
             offset += 1;
             continue;
         }
 
+        // 🟢【终极修复点 2】外层截断与内层验证完全合拍
         let frame_len = 6 + len;
         if offset + frame_len > buffer.len() {
-            return None; // 数据还没完全到齐，等外层继续填缓冲区
+            return None; // 数据还未全数收齐，退出等待下一次填入
         }
 
-        // 4. 【核心修复点 3】精确切片！只把属于这一帧的 [offset..offset + frame_len] 字节送进 parse。
-        // 原本的代码如果是多传了字节（CH343 粘包），bytes 会把后面多余的命令字节带进去，
-        // 导致 parse 内部计算 expected_checksum = bytes[5 + len] 时误取到了后面 0x0A 命令的包头数据，产生了 expected 00 got 25 的天大乌龙！
+        // 精确切片送审
         let frame = &buffer[offset..offset + frame_len];
         if let Some(response) = Response::parse(frame) {
             return Some((response, offset + frame_len));
         }
 
-        // 如果包头对了，但校验和错了（可能是脏数据），往后移 1 字节继续检索下一个有效的 57 AB
+        // 校验未通过，往后移 1 字节继续扫描
         offset += 1;
     }
 
