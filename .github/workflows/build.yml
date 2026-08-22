@@ -64,22 +64,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: 🟢 缓存 Cross/Docker 容器内部依赖与编译半成品
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git-db/
-            target/
-          key: ${{ runner.os }}-cross-build-cache-v1-${{ hashFiles('Cross.toml', 'Cargo.lock', 'build/cross/Dockerfile.*') }}
-          restore-keys: |
-            ${{ runner.os }}-cross-build-cache-v1-
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          # The Docker workflow builds the same targets with the same Cross images.
           shared-key: linux-cross-release
           key: ${{ hashFiles('Cross.toml', 'build/cross/Dockerfile.*') }}
           cache-all-crates: true
@@ -87,20 +75,11 @@ jobs:
       - name: Install cross
         run: cargo install cross --version 0.2.5 --locked
 
-      # 🟢【核心替换】绕过原厂拉取旧版基础镜像的拦截脚本，强行调用 cross 现场原生编译您的物理提纯内核
-      - name: 🟢 强制纯原生 Cross 交叉编译 ARM64 核心
-        env:
-          CARGO_TARGET_DIR: target
-        run: |
-          cross build --target aarch64-unknown-linux-gnu --release
+      - name: Build linux binary
+        run: bash build/build-images.sh
 
-      # 🟢【偷天换日打包】在执行原生 deb 打包脚本前，强行将我们现场编出来的完美版二进制程序对齐到目标打包目录
       - name: Package deb
-        run: |
-          mkdir -p target/debian
-          mkdir -p target/aarch64-unknown-linux-gnu/release
-          cp target/aarch64-unknown-linux-gnu/release/one-kvm target/
-          bash build/package-deb.sh
+        run: bash build/package-deb.sh
 
       - name: Upload deb
         uses: actions/upload-artifact@v4
@@ -128,16 +107,6 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: 🟢 缓存 vcpkg 下载与编译产物
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\vcpkg
-            vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-cache-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-cache-v1-
-
       - name: Prepare vcpkg and dependencies
         shell: pwsh
         run: |
@@ -149,10 +118,7 @@ jobs:
             git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
           }
 
-          if (-not (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) {
-            & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-          }
-          
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --x-install-root="$env:VCPKG_INSTALLED_DIR"
 
           $tripletRoot = Join-Path $env:VCPKG_INSTALLED_DIR $env:VCPKG_DEFAULT_TRIPLET
@@ -188,7 +154,7 @@ jobs:
   release:
     runs-on: ubuntu-22.04
     needs: [deb, windows]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release && inputs.release_tag != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
     timeout-minutes: 30
     permissions:
       contents: write
