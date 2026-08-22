@@ -64,7 +64,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # 🟢 [新增] 专门针对 Linux Cross 交叉编译的 Docker 容器级全量缓存
       - name: 🟢 缓存 Cross/Docker 容器内部依赖与编译半成品
         uses: actions/cache@v4
         with:
@@ -88,14 +87,20 @@ jobs:
       - name: Install cross
         run: cargo install cross --version 0.2.5 --locked
 
-      # 🟢 [核心新增] 设置环境变量，强行命令 cross 将容器内部编译目标路径映射到宿主机缓存区
-      - name: Build linux binary
+      # 🟢【核心替换】绕过原厂拉取旧版基础镜像的拦截脚本，强行调用 cross 现场原生编译您的物理提纯内核
+      - name: 🟢 强制纯原生 Cross 交叉编译 ARM64 核心
         env:
           CARGO_TARGET_DIR: target
-        run: bash build/build-images.sh
+        run: |
+          cross build --target aarch64-unknown-linux-gnu --release
 
+      # 🟢【偷天换日打包】在执行原生 deb 打包脚本前，强行将我们现场编出来的完美版二进制程序对齐到目标打包目录
       - name: Package deb
-        run: bash build/package-deb.sh
+        run: |
+          mkdir -p target/debian
+          mkdir -p target/aarch64-unknown-linux-gnu/release
+          cp target/aarch64-unknown-linux-gnu/release/one-kvm target/
+          bash build/package-deb.sh
 
       - name: Upload deb
         uses: actions/upload-artifact@v4
