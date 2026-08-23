@@ -329,12 +329,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             )
     };
     // -----------------------------------------------------------------
-    // 🟢【Windows 终极打通补丁 - 万能防解析失败加固版】
+    // 🟢【Windows 终极打通补丁 - 万能防解析失败修正版】
     // 彻底连根消灭 405/404 及 Failed to fetch MSD state 解析响应失败
     // -----------------------------------------------------------------
     #[cfg(not(unix))]
     let user_routes = {
-        // 🟢 将所有处理函数的返回值统一升级为万能全状态兼容结构，确保前端 TypeScript 数据解析绝对不报错
+        // 1. 将所有处理函数的返回值统一升级为万能全状态兼容结构，确保前端 TypeScript 数据模型解析绝对不报错
         let mock_universal_handler = || async {
             axum::response::Json(serde_json::json!({
                 "status": "success",
@@ -349,7 +349,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             }))
         };
 
-        // 穷举挂载所有可能被前端戳到的 MSD 与 OTG 路由，彻底打穿所有阻塞
+        // 2. 穷举挂载所有可能被前端高频戳到的 MSD 与 OTG 路由，彻底打穿所有前端 UI 拦截
         user_routes
             .route("/ws/uac-audio", any(mock_universal_handler))
             .route("/hid/otg/self-check", get(mock_universal_handler))
@@ -358,7 +358,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .route("/config/otg", patch(mock_universal_handler))
             .route("/config/otg-network", get(mock_universal_handler))
             .route("/config/otg-network", patch(mock_universal_handler))
-            .otg_network_status_handler("/otg/network/status", get(mock_universal_handler))
+            .route("/otg/network/status", get(mock_universal_handler)) // 🟢 已修正拼写错误：改回标准的 .route
             .route("/config/uac", get(mock_universal_handler))
             .route("/config/uac", patch(mock_universal_handler))
             .route("/msd/status", get(mock_universal_handler))
@@ -383,6 +383,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .route("/devices/network", get(mock_universal_handler))
             .route("/devices/usb/reset", post(mock_universal_handler))
     };
+
 
 
     // Protected routes (all authenticated users)
