@@ -124,7 +124,6 @@ pub struct Response {
 
 impl Response {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
-        // 1. 基础边界验证
         if bytes.len() < 6 || bytes[0] != PACKET_HEADER[0] || bytes[1] != PACKET_HEADER[1] {
             return None;
         }
@@ -132,30 +131,20 @@ impl Response {
         let cmd = bytes[3];
         let len = bytes[4] as usize;
         
-        // 完整一帧的物理长度精确等于 6 + len
         let expected_frame_len = 6 + len;
         if bytes.len() < expected_frame_len {
             return None;
         }
 
-        // 2. 动态定位当前帧真实的校验和字节
         let expected_checksum = bytes[5 + len];
-        
-        // 3. 计算前 5 + len 字节的累加校验和
         let calculated_checksum = bytes[..5 + len]
             .iter()
             .fold(0u8, |acc, &x| acc.wrapping_add(x));
             
-        // 🟢【终极降维打击修复点】全面拦截并执行物理级参数提纯
-        // 只要是 0x88 (获取配置参数回复)、0x89 (保存配置参数回复) 或 0x8F (复位应答碎片) 且长度为 50，
-        // 无论 CH343 芯片塞进来的尾巴带有多大程度的乱码和校验错位，直接强行切出纯净的 50 字节真实数据完美返回，掐断后续连环崩溃！
+        // 🟢 全面拦截并执行物理级参数提纯（解决 CH343 溢出多退 15 字节乱码的硬伤）
         if (cmd == 0x88 || cmd == 0x89 || cmd == 0x8F) && len == 50 {
             tracing::info!("CH9329F 50-bytes parameter frame (cmd: 0x{:02X}) captured. Executing physical purification.", cmd);
-            
-            // 精准剥离前 50 字节属于芯片物理参数的内容，彻底丢弃后面随行的一切粘包脏字节
             let pure_data = bytes[5..5 + 50].to_vec();
-            
-            // 直接构造完全合法的成功响应并闪现退场，阻断错误标志位错位判定
             return Some(Self {
                 cmd,
                 data: pure_data,
@@ -164,7 +153,6 @@ impl Response {
             });
         } 
         
-        // 常规短命令包（如 0x01 版本查询、日常键鼠动作包），继续执行官方原生的严格校验和过滤
         if expected_checksum != calculated_checksum {
             tracing::debug!(
                 "CH9329 checksum mismatch: expected {:02X}, got {:02X}",
@@ -174,7 +162,6 @@ impl Response {
             return None;
         }
 
-        // 4. 安全提取数据内容
         let data = bytes[5..5 + len].to_vec();
         let is_error = (cmd & RESPONSE_ERROR_MASK) == RESPONSE_ERROR_MASK;
         let error_code = if is_error && !data.is_empty() {
@@ -236,38 +223,28 @@ pub fn expected_response_cmd(cmd: u8, is_error: bool) -> u8 {
 
 pub fn try_extract_response(buffer: &[u8]) -> Option<(Response, usize)> {
     let mut offset = 0;
-    
-    // 循环扫描整个接收缓冲区
     while offset + 6 <= buffer.len() {
-        // 对齐包头
         if buffer[offset] != PACKET_HEADER[0] || buffer[offset + 1] != PACKET_HEADER[1] {
             offset += 1;
             continue;
         }
 
         let len = buffer[offset + 4] as usize;
-        
-        // 过滤异常长度的无效假数据包
         if len > MAX_DATA_LEN {
             offset += 1;
             continue;
         }
 
-        // 🟢【终极修复点 2】外层截断与内层验证完全合拍
         let frame_len = 6 + len;
         if offset + frame_len > buffer.len() {
-            return None; // 数据还未全数收齐，退出等待下一次填入
+            return None;
         }
 
-        // 精确切片送审
         let frame = &buffer[offset..offset + frame_len];
         if let Some(response) = Response::parse(frame) {
             return Some((response, offset + frame_len));
         }
-
-        // 校验未通过，往后移 1 字节继续扫描
         offset += 1;
     }
-
     None
 }
