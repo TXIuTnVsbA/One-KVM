@@ -329,28 +329,24 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             )
     };
     // -----------------------------------------------------------------
-    // 🟢【Windows 终极打通补丁 - 100% 毫无错误全绿通关版】
-    // 彻底消灭 405、Failed to fetch MSD state 以及全线打通物理串口同步
+    // 🟢【Windows 终极打通补丁 - 路由去重无崩溃版】
+    // 彻底消灭 405、修复 Overlapping method 导致的主线程崩溃死锁
     // -----------------------------------------------------------------
     #[cfg(not(unix))]
     let user_routes = {
         use axum::extract::State;
         
-        // 🟢 核心重构：伪造配置应用接口，在前端发错请求时，后端强行拦截并动态读取系统波特率写进芯片！
         let mock_config_patch_handler = |State(state): State<Arc<crate::state::AppState>>, axum::Json(payload): axum::Json<serde_json::Value>| async move {
             tracing::info!("Windows PATCH intercepted! Dynamically synchronizing config to physical serial port.");
             
-            // 1. 动态获取当前系统在本地 config.toml 或内存中生效的真实波特率和串口号（解耦硬编码锁死）
             let (current_port, current_baud) = {
                 let current_cfg = state.config.get();
                 (current_cfg.hid.ch9329_port.clone(), current_cfg.hid.ch9329_baudrate)
             };
 
-            // 2. 从前端发来的请求中，强行提取出用户在网页上刚刚修改的最新 ch9329_descriptor 配置
             if let Some(ch9329_desc) = payload.get("ch9329_descriptor") {
                 if let (Some(vid), Some(pid)) = (ch9329_desc.get("vendor_id").and_then(|v| v.as_u64()), ch9329_desc.get("product_id").and_then(|p| p.as_u64())) {
                     
-                    // 🟢 修复 E0603：直接通过公有重导出的 crate::config:: 绝对路径实例化结构体
                     let config = crate::config::Ch9329DescriptorConfig {
                         vendor_id: vid as u16,
                         product_id: pid as u16,
@@ -359,13 +355,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                         serial_number: None,
                     };
                     
-                    // 🟢 修复 E0277：完美对齐原厂闭包机制，传入 FnOnce 在 &mut 内部原地通过安全锁修改并同步落盘
                     let config_clone = config.clone();
                     let _ = state.config.update(move |cfg| {
                         cfg.hid.ch9329_descriptor = config_clone;
                     }).await;
 
-                    // 🟢【动态写入核心】完全使用网页端真实的 current_port 和 current_baud 执行底层强制写入和 5 秒复位
                     tracing::info!("Executing physical write via target serial port: {} @ {} baud", current_port, current_baud);
                     let _ = crate::hid::ch9329::Ch9329Backend::apply_device_descriptor(&current_port, current_baud, &config);
                 }
@@ -394,8 +388,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             }))
         };
 
-        // 3. 1:1 严格对照原厂 31 个 Unix 接口进行完美拦截映射，对 delete/put 补充绝对路径解析
-        // 🟢 修复 E0425：已将所有遗留的错位命名错位全部统一对齐修正为 mock_generic_handler 或 mock_config_patch_handler
+        // 1:1 严格对照原厂 31 个 Unix 接口进行完美拦截映射
+        // 🟢 已将导致崩溃的冲突行 .route("/config/hid", patch(...)) 彻底移除！
         user_routes
             .route("/ws/uac-audio", any(mock_generic_handler))
             .route("/hid/otg/self-check", get(mock_generic_handler))
@@ -407,7 +401,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .route("/otg/network/status", get(mock_generic_handler))
             .route("/config/uac", get(mock_generic_handler))
             .route("/config/uac", patch(mock_config_patch_handler))
-            .route("/config/hid", patch(mock_config_patch_handler)) // 同时挂载 HID 原生修改接口，确保双重保险
             .route("/msd/status", get(mock_generic_handler))
             .route("/msd/images", get(mock_generic_handler))
             .route("/msd/images/download", post(mock_generic_handler))
@@ -430,6 +423,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .route("/devices/network", get(mock_generic_handler))
             .route("/devices/usb/reset", post(mock_config_patch_handler))
     };
+
 
     // Protected routes (all authenticated users)
     let protected_routes = user_routes;
