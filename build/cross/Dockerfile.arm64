@@ -57,6 +57,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Add ARM64 architecture
 RUN dpkg --add-architecture arm64
 
+# 🟢 新增加固：强制开启 apt 下载重试机制，应对海外 debian 镜像源的网络抖动，彻底消灭连接被重置引发的编译红牌
+RUN echo "Acquire::Retries \"5\";" > /etc/apt/apt.conf.d/80-retries
+
 # Install cross-compiler and native build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
