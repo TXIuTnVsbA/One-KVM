@@ -18,6 +18,6 @@ pub async fn update_otg_network_config(
     Ok(Json(state.config.get().otg_network.clone()))
 }
 
-pub async fn get_otg_network_status(_State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn get_otg_network_status(State(_state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({"health": "healthy", "error": null}))
 }
