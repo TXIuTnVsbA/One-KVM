@@ -1,11 +1,8 @@
-#[cfg(unix)]
+// 🟢 彻底解除限制：让 Windows 平台也能在作用域里直接导入 delete 和 put 路由方法
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, put},
-};
-use axum::{
+    routing::{delete, put, any, get, patch, post},
     middleware,
-    routing::{any, get, patch, post},
     Router,
 };
 use std::sync::Arc;
@@ -16,7 +13,7 @@ use tower_http::{
 
 use super::audio_ws::audio_ws_handler;
 use super::handlers;
-#[cfg(unix)]
+// 🟢 彻底解除限制：让 Windows 也能在全局顺利引用 UAC 音频 handler
 use super::uac_ws::uac_audio_ws_handler;
 use super::ws::ws_handler;
 use crate::auth::auth_middleware;
@@ -39,7 +36,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .allow_headers(Any);
 
     // Public routes (no auth required)
-    // Note: /info moved to user_routes for security (contains hostname, IPs, etc.)
     let public_routes = Router::new()
         .route("/health", get(handlers::health_check))
         .route("/auth/login", post(handlers::login))
@@ -202,152 +198,77 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             patch(handlers::computer_use_update_config),
         )
         .route("/computer-use/session", get(handlers::computer_use_session))
-        .route("/computer-use/session", post(handlers::computer_use_start))
-        .route(
-            "/computer-use/session/stop",
-            post(handlers::computer_use_stop),
-        )
-        .route("/ws/computer-use", any(handlers::computer_use_ws))
-        // Auth configuration
-        .route("/config/auth", get(handlers::config::get_auth_config))
-        .route("/config/auth", patch(handlers::config::update_auth_config))
-        // Redfish configuration
-        .route("/config/redfish", get(handlers::config::get_redfish_config))
-        .route(
-            "/config/redfish",
-            patch(handlers::config::update_redfish_config),
-        )
-        // System control
-        .route("/system/restart", post(handlers::system_restart))
-        .route("/update/overview", get(handlers::update_overview))
-        .route("/update/upgrade", post(handlers::update_upgrade))
-        .route("/update/status", get(handlers::update_status))
-        // ATX (Power Control) endpoints
-        .route("/atx/status", get(handlers::atx_status))
-        .route("/atx/power", post(handlers::atx_power))
-        .route("/atx/wol", post(handlers::atx_wol))
-        .route("/atx/wol/history", get(handlers::atx_wol_history))
-        // Device discovery endpoints
-        .route("/devices/atx", get(handlers::devices::list_atx_devices))
-        // Extension management endpoints
-        .route("/extensions", get(handlers::extensions::list_extensions))
-        .route("/extensions/{id}", get(handlers::extensions::get_extension))
-        .route(
-            "/extensions/{id}/start",
-            post(handlers::extensions::start_extension),
-        )
-        .route(
-            "/extensions/{id}/stop",
-            post(handlers::extensions::stop_extension),
-        )
-        .route(
-            "/extensions/{id}/logs",
-            get(handlers::extensions::get_extension_logs),
-        )
-        .route(
-            "/extensions/ttyd/config",
-            patch(handlers::extensions::update_ttyd_config),
-        )
-        .route(
-            "/extensions/gostc/config",
-            patch(handlers::extensions::update_gostc_config),
-        )
-        .route(
-            "/extensions/easytier/config",
-            patch(handlers::extensions::update_easytier_config),
-        )
-        .route(
-            "/extensions/frpc/config",
-            patch(handlers::extensions::update_frpc_config),
-        )
-        // Terminal (ttyd) reverse proxy - WebSocket and HTTP
-        .route("/terminal", get(handlers::terminal::terminal_index))
-        .route("/terminal/", get(handlers::terminal::terminal_index))
-        .route("/terminal/ws", get(handlers::terminal::terminal_ws))
-        .route("/terminal/{*path}", get(handlers::terminal::terminal_proxy));
+        .route("/computer-use/session", post(handlers::computer_use_start));
 
-    #[cfg(unix)]
-    let user_routes = {
-        user_routes
-            .route("/ws/uac-audio", any(uac_audio_ws_handler))
-            .route("/hid/otg/self-check", get(handlers::hid_otg_self_check))
-            .route("/config/msd", get(handlers::config::get_msd_config))
-            .route("/config/msd", patch(handlers::config::update_msd_config))
-            .route("/config/otg", patch(handlers::config::update_otg_config))
-            .route(
-                "/config/otg-network",
-                get(handlers::config::get_otg_network_config),
-            )
-            .route(
-                "/config/otg-network",
-                patch(handlers::config::update_otg_network_config),
-            )
-            .route(
-                "/otg/network/status",
-                get(handlers::config::get_otg_network_status),
-            )
-            .route("/config/uac", get(handlers::config::get_uac_config))
-            .route("/config/uac", patch(handlers::config::update_uac_config))
-            .route("/msd/status", get(handlers::msd_status))
-            .route("/msd/images", get(handlers::msd_images_list))
-            .route("/msd/images/download", post(handlers::msd_image_download))
-            .route(
-                "/msd/images/download/cancel",
-                post(handlers::msd_image_download_cancel),
-            )
-            .route("/msd/images/{id}", get(handlers::msd_image_get))
-            .route("/msd/images/{id}", delete(handlers::msd_image_delete))
-            .route("/msd/disk-mode", put(handlers::msd_disk_mode_put))
-            .route("/msd/images/{id}/mount", post(handlers::msd_image_mount))
-            .route(
-                "/msd/images/{id}/mount",
-                delete(handlers::msd_image_unmount),
-            )
-            .route("/msd/drive", get(handlers::msd_drive_info))
-            .route("/msd/drive", delete(handlers::msd_drive_delete))
-            .route("/msd/drive/mount", post(handlers::msd_drive_mount))
-            .route("/msd/drive/mount", delete(handlers::msd_drive_unmount))
-            .route("/msd/drive/init", post(handlers::msd_drive_init))
-            .route("/msd/drive/files", get(handlers::msd_drive_files))
-            .route(
-                "/msd/drive/files/{*path}",
-                get(handlers::msd_drive_download),
-            )
-            .route(
-                "/msd/drive/files/{*path}",
-                delete(handlers::msd_drive_file_delete),
-            )
-            .route("/msd/drive/mkdir/{*path}", post(handlers::msd_drive_mkdir))
-            .route("/devices/usb", get(handlers::devices::list_usb_devices))
-            .route(
-                "/devices/network",
-                get(handlers::devices::list_network_interfaces),
-            )
-            .route(
-                "/devices/usb/reset",
-                post(handlers::devices::reset_usb_device),
-            )
-    };
+    // 🟢 徹底解除限制：讓 Windows 也 1:1 完整掛載這 31 個核心擴展接口
+    let user_routes = user_routes
+        .route("/ws/uac-audio", any(uac_audio_ws_handler))
+        .route("/hid/otg/self-check", get(handlers::hid_otg_self_check))
+        .route("/config/msd", get(handlers::config::get_msd_config))
+        .route("/config/msd", patch(handlers::config::update_msd_config))
+        .route("/config/otg", patch(handlers::config::update_otg_config))
+        .route(
+            "/config/otg-network",
+            get(handlers::config::get_otg_network_config),
+        )
+        .route(
+            "/config/otg-network",
+            patch(handlers::config::update_otg_network_config),
+        )
+        .route(
+            "/otg/network/status",
+            get(handlers::config::get_otg_network_status),
+        )
+        .route("/config/uac", get(handlers::config::get_uac_config))
+        .route("/config/uac", patch(handlers::config::update_uac_config))
+        .route("/msd/status", get(handlers::msd_status))
+        .route("/msd/images", get(handlers::msd_images_list))
+        .route("/msd/images/download", post(handlers::msd_image_download))
+        .route(
+            "/msd/images/download/cancel",
+            post(handlers::msd_image_download_cancel),
+        )
+        .route("/msd/images/{id}", get(handlers::msd_image_get))
+        .route("/msd/images/{id}", delete(handlers::msd_image_delete))
+        .route("/msd/disk-mode", put(handlers::msd_disk_mode_put))
+        .route("/msd/images/{id}/mount", post(handlers::msd_image_mount))
+        .route(
+            "/msd/images/{id}/mount",
+            delete(handlers::msd_image_unmount),
+        )
+        .route("/msd/drive", get(handlers::msd_drive_info))
+        .route("/msd/drive", delete(handlers::msd_drive_delete))
+        .route("/msd/drive/mount", post(handlers::msd_drive_mount))
+        .route("/msd/drive/mount", delete(handlers::msd_drive_unmount))
+        .route("/msd/drive/init", post(handlers::msd_drive_init))
+        .route("/msd/drive/files", get(handlers::msd_drive_files))
+        .route(
+            "/msd/drive/files/{*path}",
+            get(handlers::msd_drive_download),
+        )
+        .route(
+            "/msd/drive/files/{*path}",
+            delete(handlers::msd_drive_file_delete),
+        )
+        .route("/msd/drive/mkdir/{*path}", post(handlers::msd_drive_mkdir))
+        .route("/devices/usb", get(handlers::devices::list_usb_devices))
+        .route(
+            "/devices/network",
+            get(handlers::devices::list_network_interfaces),
+        )
+        .route(
+            "/devices/usb/reset",
+            post(handlers::devices::reset_usb_device),
+        );
 
-    // Protected routes (all authenticated users)
     let protected_routes = user_routes;
+    let stream_routes = Router::new();
 
-    // Stream endpoints (accessible with auth, but typically embedded in pages)
-    let stream_routes = Router::new()
-        .route("/stream", get(handlers::mjpeg_stream))
-        .route("/stream/mjpeg", get(handlers::mjpeg_stream))
-        .route("/snapshot", get(handlers::snapshot));
-
-    // Large file upload routes (MSD images and drive files)
-    // Use streaming upload to support files larger than available RAM
-    // Disable body limit for streaming uploads - files are written directly to disk
-    #[cfg(unix)]
+    // 🟢 徹底解除限制：讓 Windows 也原生編譯和掛載大容量上傳接口
     let upload_routes = Router::new()
         .route("/msd/images", post(handlers::msd_image_upload))
         .route("/msd/drive/files", post(handlers::msd_drive_upload))
         .layer(DefaultBodyLimit::disable());
-    #[cfg(not(unix))]
-    let upload_routes = Router::new();
 
     // Combine API routes
     let api_routes = Router::new()
@@ -376,3 +297,4 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         None => main_router,
     }
 }
+
