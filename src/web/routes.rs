@@ -328,102 +328,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 post(handlers::devices::reset_usb_device),
             )
     };
-    // -----------------------------------------------------------------
-    // 🟢【Windows 终极打通补丁 - 路由去重无崩溃版】
-    // 彻底消灭 405、修复 Overlapping method 导致的主线程崩溃死锁
-    // -----------------------------------------------------------------
-    #[cfg(not(unix))]
-    let user_routes = {
-        use axum::extract::State;
-        
-        let mock_config_patch_handler = |State(state): State<Arc<crate::state::AppState>>, axum::Json(payload): axum::Json<serde_json::Value>| async move {
-            tracing::info!("Windows PATCH intercepted! Dynamically synchronizing config to physical serial port.");
-            
-            let (current_port, current_baud) = {
-                let current_cfg = state.config.get();
-                (current_cfg.hid.ch9329_port.clone(), current_cfg.hid.ch9329_baudrate)
-            };
-
-            if let Some(ch9329_desc) = payload.get("ch9329_descriptor") {
-                if let (Some(vid), Some(pid)) = (ch9329_desc.get("vendor_id").and_then(|v| v.as_u64()), ch9329_desc.get("product_id").and_then(|p| p.as_u64())) {
-                    
-                    let config = crate::config::Ch9329DescriptorConfig {
-                        vendor_id: vid as u16,
-                        product_id: pid as u16,
-                        manufacturer: ch9329_desc.get("manufacturer").and_then(|s| s.as_str()).unwrap_or("WCH.CN").to_string(),
-                        product: ch9329_desc.get("product").and_then(|s| s.as_str()).unwrap_or("CH9329F").to_string(),
-                        serial_number: None,
-                    };
-                    
-                    let config_clone = config.clone();
-                    let _ = state.config.update(move |cfg| {
-                        cfg.hid.ch9329_descriptor = config_clone;
-                    }).await;
-
-                    tracing::info!("Executing physical write via target serial port: {} @ {} baud", current_port, current_baud);
-                    let _ = crate::hid::ch9329::Ch9329Backend::apply_device_descriptor(&current_port, current_baud, &config);
-                }
-            }
-
-            axum::response::Json(serde_json::json!({
-                "status": "success",
-                "message": "Physical synchronization completed on Windows",
-                "enabled": true,
-                "active": true,
-                "connected": true,
-                "data": {}
-            }))
-        };
-
-        let mock_generic_handler = || async {
-            axum::response::Json(serde_json::json!({
-                "status": "success",
-                "enabled": true,
-                "connected": true,
-                "active": true,
-                "error": null,
-                "images": [],
-                "files": [],
-                "data": {}
-            }))
-        };
-
-        // 1:1 严格对照原厂 31 个 Unix 接口进行完美拦截映射
-        // 🟢 已将导致崩溃的冲突行 .route("/config/hid", patch(...)) 彻底移除！
-        user_routes
-            .route("/ws/uac-audio", any(mock_generic_handler))
-            .route("/hid/otg/self-check", get(mock_generic_handler))
-            .route("/config/msd", get(mock_generic_handler))
-            .route("/config/msd", patch(mock_config_patch_handler)) 
-            .route("/config/otg", patch(mock_config_patch_handler)) 
-            .route("/config/otg-network", get(mock_generic_handler))
-            .route("/config/otg-network", patch(mock_config_patch_handler)) 
-            .route("/otg/network/status", get(mock_generic_handler))
-            .route("/config/uac", get(mock_generic_handler))
-            .route("/config/uac", patch(mock_config_patch_handler))
-            .route("/msd/status", get(mock_generic_handler))
-            .route("/msd/images", get(mock_generic_handler))
-            .route("/msd/images/download", post(mock_generic_handler))
-            .route("/msd/images/download/cancel", post(mock_generic_handler))
-            .route("/msd/images/{id}", get(mock_generic_handler))
-            .route("/msd/images/{id}", axum::routing::delete(mock_generic_handler))
-            .route("/msd/disk-mode", axum::routing::put(mock_config_patch_handler))
-            .route("/msd/images/{id}/mount", post(mock_generic_handler))
-            .route("/msd/images/{id}/mount", axum::routing::delete(mock_generic_handler))
-            .route("/msd/drive", get(mock_generic_handler))
-            .route("/msd/drive", axum::routing::delete(mock_generic_handler))
-            .route("/msd/drive/mount", post(mock_config_patch_handler))
-            .route("/msd/drive/mount", axum::routing::delete(mock_generic_handler))
-            .route("/msd/drive/init", post(mock_config_patch_handler))
-            .route("/msd/drive/files", get(mock_generic_handler))
-            .route("/msd/drive/files/{*path}", get(mock_generic_handler))
-            .route("/msd/drive/files/{*path}", axum::routing::delete(mock_generic_handler))
-            .route("/msd/drive/mkdir/{*path}", post(mock_config_patch_handler))
-            .route("/devices/usb", get(mock_generic_handler))
-            .route("/devices/network", get(mock_generic_handler))
-            .route("/devices/usb/reset", post(mock_config_patch_handler))
-    };
-
 
     // Protected routes (all authenticated users)
     let protected_routes = user_routes;
@@ -442,21 +346,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/msd/images", post(handlers::msd_image_upload))
         .route("/msd/drive/files", post(handlers::msd_drive_upload))
         .layer(DefaultBodyLimit::disable());
-
-    // 🟢 保持纯净的非 unix 伪上传接口挂载
     #[cfg(not(unix))]
-    let upload_routes = {
-        let mock_upload_handler = || async {
-            axum::response::Json(serde_json::json!({
-                "status": "success",
-                "message": "Upload interface mocked on Windows environment",
-                "data": { "id": "mock_id", "name": "mock_file.iso" }
-            }))
-        };
-        Router::new()
-            .route("/msd/images", axum::routing::post(mock_upload_handler))
-            .route("/msd/drive/files", axum::routing::post(mock_upload_handler))
-    };
+    let upload_routes = Router::new();
 
     // Combine API routes
     let api_routes = Router::new()
