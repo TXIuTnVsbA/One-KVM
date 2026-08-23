@@ -329,7 +329,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             )
     };
     // -----------------------------------------------------------------
-    // 🟢【Windows 终极打通补丁】全量伪造 Linux 专属接口，彻底连根斩断 405/404 错误
+    // 🟢【Windows 终极打通补丁 - 绝对路径加固版】全量伪造 Linux 专属接口，彻底连根斩断 405/404 错误
     // -----------------------------------------------------------------
     #[cfg(not(unix))]
     let user_routes = {
@@ -352,7 +352,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             }))
         };
 
-        // 3. 1:1 完美穷举挂载所有可能被前端高频戳到的路由，彻底消除任何潜在的网络恐慌
+        // 3. 1:1 完美穷举挂载所有可能被前端高频戳到的路由，使用绝对路径确保 Windows 编译完美通过
         user_routes
             .route("/ws/uac-audio", any(mock_success_handler))
             .route("/hid/otg/self-check", get(mock_success_handler))
@@ -369,24 +369,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             .route("/msd/images/download", post(mock_success_handler))
             .route("/msd/images/download/cancel", post(mock_success_handler))
             .route("/msd/images/{id}", get(mock_success_handler))
-            .route("/msd/images/{id}", delete(mock_success_handler))
-            .route("/msd/disk-mode", put(mock_success_handler))
+            .route("/msd/images/{id}", axum::routing::delete(mock_success_handler)) // 🟢 绝对路径修复
+            .route("/msd/disk-mode", axum::routing::put(mock_success_handler))       // 🟢 绝对路径修复
             .route("/msd/images/{id}/mount", post(mock_success_handler))
-            .route("/msd/images/{id}/mount", delete(mock_success_handler))
+            .route("/msd/images/{id}/mount", axum::routing::delete(mock_success_handler)) // 🟢 绝对路径修复
             .route("/msd/drive", get(mock_success_handler))
-            .route("/msd/drive", delete(mock_success_handler))
+            .route("/msd/drive", axum::routing::delete(mock_success_handler))       // 🟢 绝对路径修复
             .route("/msd/drive/mount", post(mock_success_handler))
-            .route("/msd/drive/mount", delete(mock_success_handler))
+            .route("/msd/drive/mount", axum::routing::delete(mock_success_handler)) // 🟢 绝对路径修复
             .route("/msd/drive/init", post(mock_success_handler))
             .route("/msd/drive/files", get(mock_success_handler))
             .route("/msd/drive/files/{*path}", get(mock_success_handler))
-            .route("/msd/drive/files/{*path}", delete(mock_success_handler))
+            .route("/msd/drive/files/{*path}", axum::routing::delete(mock_success_handler)) // 🟢 绝对路径修复
             .route("/msd/drive/mkdir/{*path}", post(mock_success_handler))
             .route("/devices/usb", get(mock_success_handler))
             .route("/devices/network", get(mock_success_handler))
             .route("/devices/usb/reset", post(mock_success_handler))
     };
-
     // Protected routes (all authenticated users)
     let protected_routes = user_routes;
 
