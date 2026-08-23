@@ -7,8 +7,12 @@ mod auth;
 mod hid;
 #[cfg(unix)]
 mod msd;
+#[cfg(not(unix))]
+mod msd_stub;
 #[cfg(unix)]
 mod otg;
+#[cfg(not(unix))]
+mod otg_network_stub;
 #[cfg(unix)]
 mod otg_network;
 mod redfish;
@@ -17,6 +21,8 @@ mod rustdesk;
 mod stream;
 #[cfg(unix)]
 mod uac;
+#[cfg(not(unix))]
+mod uac_stub;
 mod usb_update;
 pub(crate) mod video;
 mod vnc;
@@ -29,10 +35,12 @@ pub use auth::{get_auth_config, update_auth_config};
 pub use hid::{get_hid_config, update_hid_config};
 #[cfg(unix)]
 pub use msd::{get_msd_config, update_msd_config};
+#[cfg(not(unix))]
+pub use msd_stub::{get_msd_config, update_msd_config};
 #[cfg(unix)]
 pub use otg::update_otg_config;
-#[cfg(unix)]
-pub use otg_network::{get_otg_network_config, get_otg_network_status, update_otg_network_config};
+#[cfg(not(unix))]
+pub use otg_network_stub::{get_otg_network_config, update_otg_network_config, get_otg_network_status};
 pub use redfish::{get_redfish_config, update_redfish_config};
 pub use rtsp::{
     get_rtsp_config, get_rtsp_status, start_rtsp_service, stop_rtsp_service, update_rtsp_config,
@@ -45,10 +53,10 @@ pub use rustdesk::{
 pub use stream::{get_stream_config, update_stream_config};
 #[cfg(unix)]
 pub use uac::{get_uac_config, update_uac_config};
+#[cfg(not(unix))]
+pub use uac_stub::{get_uac_config, update_uac_config};
 pub use video::{get_video_config, update_video_config};
-pub use vnc::{
-    get_vnc_config, get_vnc_status, start_vnc_service, stop_vnc_service, update_vnc_config,
-};
+pub use vnc::{get_vnc_config, get_vnc_status, start_vnc_service, stop_vnc_service, update_vnc_config};
 pub use watchdog::{get_watchdog_config, update_watchdog_config};
 pub use web::{get_web_config, update_web_config};
 
@@ -68,9 +76,6 @@ fn sanitize_config_for_api(config: &mut AppConfig) {
     config.rustdesk.private_key = None;
     config.rustdesk.signing_public_key = None;
     config.rustdesk.signing_private_key = None;
-
-    config.rtsp.password = None;
-    config.vnc.password = None;
 }
 
 pub async fn get_all_config(State(state): State<Arc<AppState>>) -> Json<AppConfig> {
