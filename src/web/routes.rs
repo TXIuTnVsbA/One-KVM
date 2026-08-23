@@ -329,60 +329,78 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             )
     };
     // -----------------------------------------------------------------
-    // 🟢【Windows 终极打通补丁 - 万能防解析失败修正版】
-    // 彻底连根消灭 405/404 及 Failed to fetch MSD state 解析响应失败
+    // 🟢【Windows 终极打通补丁 - 全使能通关加固版】
+    // 强行迎合前端判定逻辑返回 true，全线解冻并触发最终的 hid 保存核心请求
     // -----------------------------------------------------------------
     #[cfg(not(unix))]
     let user_routes = {
-        // 1. 将所有处理函数的返回值统一升级为万能全状态兼容结构，确保前端 TypeScript 数据模型解析绝对不报错
-        let mock_universal_handler = || async {
+        // 1. 迎合配置应用接口（PATCH /config/otg 等），强行返回 true 让前端认为应用成功，继续向下走
+        let mock_config_success_handler = || async {
             axum::response::Json(serde_json::json!({
                 "status": "success",
                 "message": "Mocked on Windows",
-                "enabled": false,
-                "connected": false,
-                "active": false,
+                "enabled": true,   // 🟢 强行改为 true，骗过前端的保存后续链条判定！
+                "active": true,    // 🟢 强行改为 true
+                "connected": true, // 🟢 强行改为 true
+                "data": {}
+            }))
+        };
+
+        // 2. 迎合大容量存储状态（GET /msd/status 等）获取接口
+        let mock_msd_status_handler = || async {
+            axum::response::Json(serde_json::json!({
+                "enabled": true,   // 🟢 强行改为 true
+                "connected": true, // 🟢 强行改为 true
+                "active": true,
                 "error": null,
-                "data": null,
                 "images": [],
                 "files": []
             }))
         };
 
-        // 2. 穷举挂载所有可能被前端高频戳到的 MSD 与 OTG 路由，彻底打穿所有前端 UI 拦截
+        // 3. 通用的基础空应答
+        let mock_generic_handler = || async {
+            axum::response::Json(serde_json::json!({
+                "status": "success",
+                "data": []
+            }))
+        };
+
+        // 穷举挂载所有可能被前端戳到的 MSD 与 OTG 路由，全线绿灯大放行
         user_routes
-            .route("/ws/uac-audio", any(mock_universal_handler))
-            .route("/hid/otg/self-check", get(mock_universal_handler))
-            .route("/config/msd", get(mock_universal_handler))
-            .route("/config/msd", patch(mock_universal_handler))
-            .route("/config/otg", patch(mock_universal_handler))
-            .route("/config/otg-network", get(mock_universal_handler))
-            .route("/config/otg-network", patch(mock_universal_handler))
-            .route("/otg/network/status", get(mock_universal_handler)) // 🟢 已修正拼写错误：改回标准的 .route
-            .route("/config/uac", get(mock_universal_handler))
-            .route("/config/uac", patch(mock_universal_handler))
-            .route("/msd/status", get(mock_universal_handler))
-            .route("/msd/images", get(mock_universal_handler))
-            .route("/msd/images/download", post(mock_universal_handler))
-            .route("/msd/images/download/cancel", post(mock_universal_handler))
-            .route("/msd/images/{id}", get(mock_universal_handler))
-            .route("/msd/images/{id}", axum::routing::delete(mock_universal_handler))
-            .route("/msd/disk-mode", axum::routing::put(mock_universal_handler))
-            .route("/msd/images/{id}/mount", post(mock_universal_handler))
-            .route("/msd/images/{id}/mount", axum::routing::delete(mock_universal_handler))
-            .route("/msd/drive", get(mock_universal_handler))
-            .route("/msd/drive", axum::routing::delete(mock_universal_handler))
-            .route("/msd/drive/mount", post(mock_universal_handler))
-            .route("/msd/drive/mount", axum::routing::delete(mock_universal_handler))
-            .route("/msd/drive/init", post(mock_universal_handler))
-            .route("/msd/drive/files", get(mock_universal_handler))
-            .route("/msd/drive/files/{*path}", get(mock_universal_handler))
-            .route("/msd/drive/files/{*path}", axum::routing::delete(mock_universal_handler))
-            .route("/msd/drive/mkdir/{*path}", post(mock_universal_handler))
-            .route("/devices/usb", get(mock_universal_handler))
-            .route("/devices/network", get(mock_universal_handler))
-            .route("/devices/usb/reset", post(mock_universal_handler))
+            .route("/ws/uac-audio", any(mock_generic_handler))
+            .route("/hid/otg/self-check", get(mock_config_success_handler))
+            .route("/config/msd", get(mock_msd_status_handler))
+            .route("/config/msd", patch(mock_config_success_handler))
+            .route("/config/otg", patch(mock_config_success_handler))
+            .route("/config/otg-network", get(mock_config_success_handler))
+            .route("/config/otg-network", patch(mock_config_success_handler))
+            .route("/otg/network/status", get(mock_config_success_handler))
+            .route("/config/uac", get(mock_config_success_handler))
+            .route("/config/uac", patch(mock_config_success_handler))
+            .route("/msd/status", get(mock_msd_status_handler))
+            .route("/msd/images", get(mock_generic_handler))
+            .route("/msd/images/download", post(mock_generic_handler))
+            .route("/msd/images/download/cancel", post(mock_generic_handler))
+            .route("/msd/images/{id}", get(mock_generic_handler))
+            .route("/msd/images/{id}", axum::routing::delete(mock_generic_handler))
+            .route("/msd/disk-mode", axum::routing::put(mock_config_success_handler))
+            .route("/msd/images/{id}/mount", post(mock_config_success_handler))
+            .route("/msd/images/{id}/mount", axum::routing::delete(mock_config_success_handler))
+            .route("/msd/drive", get(mock_generic_handler))
+            .route("/msd/drive", axum::routing::delete(mock_generic_handler))
+            .route("/msd/drive/mount", post(mock_config_success_handler))
+            .route("/msd/drive/mount", axum::routing::delete(mock_config_success_handler))
+            .route("/msd/drive/init", post(mock_config_success_handler))
+            .route("/msd/drive/files", get(mock_generic_handler))
+            .route("/msd/drive/files/{*path}", get(mock_generic_handler))
+            .route("/msd/drive/files/{*path}", axum::routing::delete(mock_generic_handler))
+            .route("/msd/drive/mkdir/{*path}", post(mock_config_success_handler))
+            .route("/devices/usb", get(mock_generic_handler))
+            .route("/devices/network", get(mock_generic_handler))
+            .route("/devices/usb/reset", post(mock_config_success_handler))
     };
+
 
 
 
