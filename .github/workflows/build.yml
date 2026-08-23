@@ -87,6 +87,15 @@ jobs:
       - name: Install cross
         run: cargo install cross --version 0.2.5 --locked
 
+      # 🟢【APT 加固防断连】在交叉编译前，强行将重试计数机制写入系统配置，防止 Debian 官方源出现 Connection reset 中断
+      - name: 🟢 配置 APT 高频重试器
+        run: |
+          sudo sh -c 'echo "Acquire::Retries \"5\";" > /etc/apt/apt.conf.d/80-retries'
+          # 如果项目中包含 build/cross/Dockerfile.arm64，直接为其注入重试代码，双重保险防断连
+          if [ -f "build/cross/Dockerfile.arm64" ]; then
+            sed -i '/apt-get update/i RUN echo "Acquire::Retries \\"5\\";" > /etc/apt/apt.conf.d/80-retries' build/cross/Dockerfile.arm64
+          fi
+
       # 🟢【终极增量净化替换】在编译前强行调用 cross 容器清理目标编译缓存，彻底粉碎脏残留，逼迫编译器使用最新物理提纯源码现场压制
       - name: 🟢 强行粉碎脏缓存并原生 Cross 编译核心
         env:
