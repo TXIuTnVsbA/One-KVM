@@ -20,7 +20,7 @@ use tracing::{info, trace, warn};
 use super::backend::{HidBackend, HidBackendRuntimeSnapshot};
 use super::ch9329_proto::{
     build_packet, cmd, expected_response_cmd, try_extract_response, ChipInfo, LedStatus, Response,
-    DEFAULT_ADDR, DEFAULT_BAUD_RATE, 
+    DEFAULT_ADDR, DEFAULT_BAUD_RATE, MAX_PACKET_SIZE,
 };
 use super::types::{KeyEventType, KeyboardEvent, KeyboardReport, MouseEvent, MouseEventType};
 use crate::config::{Ch9329DescriptorConfig, Ch9329DescriptorState};
@@ -45,7 +45,7 @@ const PARAM_CFG_STRING_FLAGS_OFFSET: usize = 36;
 const DESCRIPTOR_READ_RETRIES: usize = 3;
 const DESCRIPTOR_RETRY_DELAY_MS: u64 = 80;
 
-// 🟢 修改后：拉长到 5 秒，完美容纳新款 CH9329F 的复位重启耗时
+// CH9329/CH9329F can take several seconds to restart after a descriptor update.
 const DESCRIPTOR_APPLY_RESET_WAIT_MS: u64 = 5000;
 
 const USB_STRING_MAX_LEN: usize = 23;
@@ -361,51 +361,52 @@ impl Ch9329Backend {
         Ok(())
     }
 
-        fn xfer_packet(
+    fn xfer_packet(
         port: &mut dyn serialport::SerialPort,
         address: u8,
         cmd: u8,
         data: &[u8],
     ) -> Result<Response> {
-        // 1. 发送前先清空缓冲区，确保起点干净
-        let _ = port.clear(serialport::ClearBuffer::All);
+        let _ = port.clear(serialport::ClearBuffer::Input);
 
-        // 2. 发送请求命令
         Self::write_packet(port, address, cmd, data)?;
 
-        // 预开辟足够大的动态动态接收缓冲区
+        // Keep enough room for a full parameter response and adjacent packets.
         let mut pending = Vec::with_capacity(256);
         let deadline = Instant::now() + Duration::from_millis(RESPONSE_TIMEOUT_MS);
         let expected_ok = expected_response_cmd(cmd, false);
         let expected_err = expected_response_cmd(cmd, true);
 
         loop {
-            // 🟢【核心修复点 1】将单次读取的临时口袋开大到 256 字节
-            // 确保 CH343 瞬间送来的 56 字节乃至多个粘包能够在一把 read 中被完整、不截断地吞下
             let mut chunk = [0u8; 256];
             match port.read(&mut chunk) {
                 Ok(n) if n > 0 => {
                     pending.extend_from_slice(&chunk[..n]);
 
-                    // 🟢【核心修复点 2】使用循环不间断地排空当前 pending 里的所有数据
-                    // 应对 CH343 极速带来的多命令粘包场景
+                    // Drain every complete frame so adjacent/out-of-order responses
+                    // cannot block the response for the current command.
                     while let Some((response, consumed)) = try_extract_response(&pending) {
-                        // 无论当前这个包是不是我们要的，都必须先把它从 pending 缓冲区里移走，防止阻塞
                         let current_response_cmd = response.cmd;
                         pending.drain(..consumed);
 
-                        // 精准命中：如果是我们当前命令对应的成功或失败回包，立刻返回，通关！
-                        if current_response_cmd == expected_ok || current_response_cmd == expected_err {
+                        if current_response_cmd == expected_ok
+                            || current_response_cmd == expected_err
+                        {
                             return Ok(response);
                         }
 
-                        // 如果捞出来的是别的命令的包（比如走得太快的心跳包或键鼠碎片），打印 trace 留痕，继续向下捞
                         trace!(
                             "CH9329 filtered an overlapping packet: expected 0x{:02X}/0x{:02X}, bypass 0x{:02X}",
                             expected_ok,
                             expected_err,
                             current_response_cmd
                         );
+                    }
+
+                    // Bound memory use if a noisy or disconnected port keeps delivering bytes.
+                    if pending.len() > MAX_PACKET_SIZE * 4 {
+                        let keep = MAX_PACKET_SIZE * 2;
+                        pending.drain(..pending.len().saturating_sub(keep));
                     }
                 }
                 Ok(_) => {}
@@ -418,20 +419,21 @@ impl Ch9329Backend {
                 }
             }
 
-            // 3. 超时安全熔断
             if Instant::now() >= deadline {
                 return Err(Self::backend_error(
-                    format!("No matching response from CH9329 for cmd 0x{:02X}. Remaining buffer: {}", cmd, Self::hex_bytes(&pending)),
+                    format!(
+                        "No matching response from CH9329 for cmd 0x{:02X}. Remaining buffer: {}",
+                        cmd,
+                        Self::hex_bytes(&pending)
+                    ),
                     "no_response",
                 ));
             }
 
-            // 给系统级串口驱动留出微小的微秒级换气时间
+            // Give the serial driver a short opportunity to deliver the next chunk.
             thread::sleep(Duration::from_micros(200));
         }
     }
-
-
     fn try_best_effort_reset(port: &mut dyn serialport::SerialPort, address: u8) {
         if let Err(err) = Self::write_packet(port, address, cmd::RESET, &[]) {
             trace!("CH9329 best-effort reset failed: {}", err);
@@ -604,7 +606,7 @@ impl Ch9329Backend {
         })
     }
 
-        fn read_device_descriptor_on_port(
+    fn read_device_descriptor_on_port(
         port: &mut dyn serialport::SerialPort,
         address: u8,
     ) -> Result<Ch9329DescriptorState> {
@@ -637,15 +639,6 @@ impl Ch9329Backend {
         } else {
             None
         };
-
-        // 🟢【自动区分核心】如果芯片存储的物理 PID 是 0xE12A (CH9329F 的出厂物理默认值)
-        // 且芯片未启用或未定义具体的产品名称字符串，我们将其在网页前端无缝、全自动填充为 "CH9329F" 展现
-        if descriptor.product_id == 0xe12a && descriptor.product.is_empty() {
-            descriptor.product = "CH9329F".to_string();
-        } else if descriptor.product_id == 0xe129 && descriptor.product.is_empty() {
-            // 老款芯片兜底，保持原本在网页前端显示纯净的 CH9329 默认名称
-            descriptor.product = "CH9329".to_string();
-        }
 
         Ok(Ch9329DescriptorState {
             descriptor,
@@ -720,8 +713,6 @@ impl Ch9329Backend {
         let mut port = Self::open_port(port_path, baud_rate)?;
         Self::read_device_descriptor_on_port(port.as_mut(), DEFAULT_ADDR)
     }
-
-
     fn open_ready_port(
         port_path: &str,
         baud_rate: u32,
@@ -891,16 +882,8 @@ impl Ch9329Backend {
         loop {
             match Self::open_ready_port(port_path, baud_rate, address) {
                 Ok((port, info)) => {
-                    // 🟢 动态智能命名：判断是新款 CH9329F 还是老款 CH9329
-                    let chip_name = if info.version_raw == 0x30 {
-                        "CH9329F"
-                    } else {
-                        "CH9329"
-                    };
-
                     info!(
-                        "{} reconnected: {}, USB: {}",
-                        chip_name,
+                        "CH9329-compatible chip reconnected: {}, USB: {}",
                         info.version,
                         if info.usb_connected {
                             "connected"
@@ -923,8 +906,6 @@ impl Ch9329Backend {
             }
         }
     }
-
-
     fn recover_worker_port(
         mut port: Box<dyn serialport::SerialPort>,
         rx: &mpsc::Receiver<WorkerCommand>,
@@ -1201,16 +1182,8 @@ impl HidBackend for Ch9329Backend {
 
         match init_rx.recv_timeout(Duration::from_millis(INIT_WAIT_MS)) {
             Ok(Ok(info)) => {
-                // 🟢 动态智能命名：系统启动初始化时自动在日志中解耦芯片型号
-                let chip_name = if info.version_raw == 0x30 {
-                    "CH9329F"
-                } else {
-                    "CH9329"
-                };
-
                 info!(
-                    "{} chip detected: {}, USB: {}, LEDs: NumLock={}, CapsLock={}, ScrollLock={}",
-                    chip_name,
+                    "CH9329-compatible chip detected: {}, USB: {}, LEDs: NumLock={}, CapsLock={}, ScrollLock={}",
                     info.version,
                     if info.usb_connected {
                         "connected"
@@ -1229,13 +1202,13 @@ impl HidBackend for Ch9329Backend {
             Ok(Err(err)) => {
                 self.record_error(
                     format!(
-                        "CH9329/CH9329F not responding on {} @ {} baud: {}",
+                        "CH9329-compatible chip not responding on {} @ {} baud: {}",
                         self.port_path, self.baud_rate, err
                     ),
                     "init_failed",
                 );
                 warn!(
-                    "CH9329/CH9329F not responding on {} @ {} baud, retrying in background: {}",
+                    "CH9329-compatible chip not responding on {} @ {} baud, retrying in background: {}",
                     self.port_path, self.baud_rate, err
                 );
                 *self.worker_tx.lock() = Some(tx);
@@ -1245,14 +1218,16 @@ impl HidBackend for Ch9329Backend {
             Err(_) => {
                 let _ = tx.send(WorkerCommand::Shutdown);
                 let _ = handle.join();
-                self.record_error("Timed out waiting for CH9329/CH9329F worker init", "init_timeout");
+                self.record_error(
+                    "Timed out waiting for CH9329-compatible worker init",
+                    "init_timeout",
+                );
                 Err(AppError::Internal(
-                    "Timed out waiting for CH9329/CH9329F initialization".to_string(),
+                    "Timed out waiting for CH9329-compatible initialization".to_string(),
                 ))
             }
         }
     }
-
 
     async fn send_keyboard(&self, event: KeyboardEvent) -> Result<()> {
         let usb_key = event.key.to_hid_usage();

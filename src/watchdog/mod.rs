@@ -398,8 +398,6 @@ mod platform {
     }
 }
 
-// 🟢 新增這行屬性，強行命令編譯器關閉對此結構體內部所有未讀取欄位（如 index）的死代碼報警
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct DiscoveredWatchdog {
     index: u32,

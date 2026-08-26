@@ -10,6 +10,7 @@ pub const DEFAULT_ADDR: u8 = 0x00;
 pub const DEFAULT_BAUD_RATE: u32 = 9600;
 pub const MAX_DATA_LEN: usize = 64;
 pub const MAX_PACKET_SIZE: usize = 70;
+const EXTENDED_PARAMETER_RESPONSE_SIZES: [usize; 2] = [72, 88];
 
 pub mod cmd {
     pub const GET_INFO: u8 = 0x01;
@@ -124,47 +125,21 @@ pub struct Response {
 
 impl Response {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
-        // 1. 基础边界验证
         if bytes.len() < 6 || bytes[0] != PACKET_HEADER[0] || bytes[1] != PACKET_HEADER[1] {
             return None;
         }
 
         let cmd = bytes[3];
         let len = bytes[4] as usize;
-        
-        // 完整一帧的物理长度精确等于 6 + len
         let expected_frame_len = 6 + len;
         if bytes.len() < expected_frame_len {
             return None;
         }
 
-        // 2. 动态定位当前帧真实的校验和字节
         let expected_checksum = bytes[5 + len];
-        
-        // 3. 计算前 5 + len 字节的累加校验和
         let calculated_checksum = bytes[..5 + len]
             .iter()
             .fold(0u8, |acc, &x| acc.wrapping_add(x));
-            
-        // 🟢【终极降维打击修复点】全面拦截并执行物理级参数提纯
-        // 只要是 0x88 (获取配置参数回复)、0x89 (保存配置参数回复) 或 0x8F (复位应答碎片) 且长度为 50，
-        // 无论 CH343 芯片塞进来的尾巴带有多大程度的乱码和校验错位，直接强行切出纯净的 50 字节真实数据完美返回，掐断后续连环崩溃！
-        if (cmd == 0x88 || cmd == 0x89 || cmd == 0x8F) && len == 50 {
-            tracing::info!("CH9329F 50-bytes parameter frame (cmd: 0x{:02X}) captured. Executing physical purification.", cmd);
-            
-            // 精准剥离前 50 字节属于芯片物理参数的内容，彻底丢弃后面随行的一切粘包脏字节
-            let pure_data = bytes[5..5 + 50].to_vec();
-            
-            // 直接构造完全合法的成功响应并闪现退场，阻断错误标志位错位判定
-            return Some(Self {
-                cmd,
-                data: pure_data,
-                is_error: false,
-                error_code: None,
-            });
-        } 
-        
-        // 常规短命令包（如 0x01 版本查询、日常键鼠动作包），继续执行官方原生的严格校验和过滤
         if expected_checksum != calculated_checksum {
             tracing::debug!(
                 "CH9329 checksum mismatch: expected {:02X}, got {:02X}",
@@ -174,7 +149,6 @@ impl Response {
             return None;
         }
 
-        // 4. 安全提取数据内容
         let data = bytes[5..5 + len].to_vec();
         let is_error = (cmd & RESPONSE_ERROR_MASK) == RESPONSE_ERROR_MASK;
         let error_code = if is_error && !data.is_empty() {
@@ -236,38 +210,125 @@ pub fn expected_response_cmd(cmd: u8, is_error: bool) -> u8 {
 
 pub fn try_extract_response(buffer: &[u8]) -> Option<(Response, usize)> {
     let mut offset = 0;
-    
-    // 循环扫描整个接收缓冲区
     while offset + 6 <= buffer.len() {
-        // 对齐包头
         if buffer[offset] != PACKET_HEADER[0] || buffer[offset + 1] != PACKET_HEADER[1] {
             offset += 1;
             continue;
         }
 
         let len = buffer[offset + 4] as usize;
-        
-        // 过滤异常长度的无效假数据包
         if len > MAX_DATA_LEN {
             offset += 1;
             continue;
         }
 
-        // 🟢【终极修复点 2】外层截断与内层验证完全合拍
         let frame_len = 6 + len;
         if offset + frame_len > buffer.len() {
-            return None; // 数据还未全数收齐，退出等待下一次填入
+            return None;
         }
 
-        // 精确切片送审
         let frame = &buffer[offset..offset + frame_len];
         if let Some(response) = Response::parse(frame) {
             return Some((response, offset + frame_len));
         }
 
-        // 校验未通过，往后移 1 字节继续扫描
+        // Some CH9329F firmware appends reserved bytes to GET_PARA_CFG while
+        // retaining the protocol LEN value of 50. Locate and validate the real
+        // checksum, return the documented 50-byte payload, and consume the
+        // complete extended frame. Other commands keep strict framing.
+        let cmd = buffer[offset + 3];
+        let data_start = offset + 5;
+        let parameter_payload_is_plausible = cmd == expected_response_cmd(cmd::GET_PARA_CFG, false)
+            && len == 50
+            && matches!(buffer[data_start], 0x00..=0x03 | 0x80..=0x83)
+            && matches!(buffer[data_start + 1], 0x00..=0x02 | 0x80..=0x82);
+        if parameter_payload_is_plausible {
+            for extended_size in EXTENDED_PARAMETER_RESPONSE_SIZES {
+                let extended_end = offset + extended_size;
+                if buffer.len() >= extended_end {
+                    let checksum_index = extended_end - 1;
+                    if calculate_checksum(&buffer[offset..checksum_index]) != buffer[checksum_index]
+                    {
+                        continue;
+                    }
+                    return Some((
+                        Response {
+                            cmd,
+                            data: buffer[data_start..data_start + len].to_vec(),
+                            is_error: false,
+                            error_code: None,
+                        },
+                        extended_end,
+                    ));
+                }
+            }
+
+            if buffer.len() < offset + EXTENDED_PARAMETER_RESPONSE_SIZES[1] {
+                return None;
+            }
+        }
+
         offset += 1;
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_standard_response_and_checksum() {
+        let frame = build_packet(DEFAULT_ADDR, 0x81, &[0x30, 0x01, 0x00, 0, 0, 0, 0, 0]);
+        let response = Response::parse(&frame).expect("valid response");
+        assert_eq!(response.cmd, 0x81);
+        assert_eq!(response.data, vec![0x30, 0x01, 0x00, 0, 0, 0, 0, 0]);
+        assert!(!response.is_error);
+    }
+
+    #[test]
+    fn extracts_extended_parameter_response_with_valid_trailing_checksum() {
+        let payload = [
+            0x80, 0x80, 0x00, 0x00, 0x00, 0x25, 0x80, 0x08, 0x00, 0x00, 0x03, 0x86, 0x1A, 0x2A,
+            0xE1, 0x00, 0x00, 0x00, 0x01, 0x00, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        for reserved_len in [16, 32] {
+            let mut frame = vec![0x57, 0xAB, DEFAULT_ADDR, 0x88, 50];
+            frame.extend_from_slice(&payload);
+            frame.extend_from_slice(&vec![0; reserved_len]);
+            frame.push(calculate_checksum(&frame));
+
+            assert!(Response::parse(&frame[..56]).is_none());
+            let (response, consumed) = try_extract_response(&frame).expect("extended response");
+            assert_eq!(response.cmd, 0x88);
+            assert_eq!(response.data, payload);
+            assert!(!response.is_error);
+            assert_eq!(consumed, frame.len());
+        }
+    }
+
+    #[test]
+    fn rejects_bad_checksum_for_other_commands() {
+        let mut frame = build_packet(DEFAULT_ADDR, 0x89, &[0x00; 50]);
+        *frame.last_mut().unwrap() ^= 0xFF;
+        assert!(Response::parse(&frame).is_none());
+        assert!(try_extract_response(&frame).is_none());
+    }
+
+    #[test]
+    fn extracts_noise_and_adjacent_packets() {
+        let first = build_packet(DEFAULT_ADDR, 0x81, &[0x30, 0x01, 0, 0, 0, 0, 0, 0]);
+        let second = build_packet(DEFAULT_ADDR, 0x82, &[0x00]);
+        let mut buffer = vec![0x00, 0xFF];
+        buffer.extend_from_slice(&first);
+        buffer.extend_from_slice(&second);
+
+        let (_, consumed) = try_extract_response(&buffer).expect("first response");
+        assert_eq!(consumed, 2 + first.len());
+        let (response, _) = try_extract_response(&buffer[consumed..]).expect("second response");
+        assert_eq!(response.cmd, 0x82);
+    }
 }
